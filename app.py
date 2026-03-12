@@ -151,8 +151,8 @@ def main():
             bytes_data = img_file_buffer.getvalue()
             cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
 
-            # YOLO detection (threshold 0.2 for extreme sensitivity)
-            results = model(cv2_img, stream=True, classes=[67], conf=0.2)
+            # YOLO detection (extreme sensitivity at 0.15)
+            results = model(cv2_img, stream=True, classes=[67], conf=0.15)
             
             phone_detected = False
             for r in results:
@@ -161,9 +161,16 @@ def main():
                     break
 
             if phone_detected:
+                # Play alert sound (system beep implementation for Streamlit)
+                st.markdown("""
+                    <audio autoplay>
+                        <source src="https://www.soundjay.com/buttons/beep-01a.mp3" type="audio/mpeg">
+                    </audio>
+                """, unsafe_allow_html=True)
+                
                 st.session_state.session_active = False
                 st.session_state.detected = True
-                # Display the violation frame briefly or just rerun
+                time.sleep(1) # Allow sound to start
                 st.rerun()
             else:
                 st.success("No unauthorized devices detected in this frame.")
