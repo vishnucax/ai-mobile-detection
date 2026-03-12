@@ -136,52 +136,37 @@ def main():
 
     elif st.session_state.session_active:
         st.title("Monitoring Active")
-        st.warning("Continuous scan for unauthorized mobile devices is in progress.")
+        st.warning("Position yourself in front of the camera. The system will process each snapshot for unauthorized devices.")
         
-        # Placeholder for video frame
-        frame_placeholder = st.empty()
+        # Use Streamlit's built-in camera input for cloud compatibility
+        enable_camera = st.checkbox("Enable Camera", value=True)
+        img_file_buffer = st.camera_input("Take a snapshot for verification", disabled=not enable_camera)
         
         if st.button("End Manual Session"):
             st.session_state.session_active = False
             st.rerun()
 
-        # Open WebCam
-        cap = cv2.VideoCapture(0)
-        
-        while cap.isOpened() and st.session_state.session_active:
-            ret, frame = cap.read()
-            if not ret:
-                st.error("Communication with the camera was lost.")
-                break
+        if img_file_buffer is not None:
+            # Convert the file buffer to an OpenCV image
+            bytes_data = img_file_buffer.getvalue()
+            cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
 
-            # YOLO detection
-            # 67 is 'cell phone'
-            # Reducing confidence to 0.2 as per user request to catch small/partial parts
-            results = model(frame, stream=True, classes=[67], conf=0.2)
+            # YOLO detection (threshold 0.2 for extreme sensitivity)
+            results = model(cv2_img, stream=True, classes=[67], conf=0.2)
             
             phone_detected = False
             for r in results:
-                boxes = r.boxes
-                if len(boxes) > 0:
+                if len(r.boxes) > 0:
                     phone_detected = True
-                    # Just draw red box for high-security feel without emojis or labels
-                    for box in boxes:
-                        x1, y1, x2, y2 = box.xyxy[0]
-                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
-
-            # Convert BGR to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_placeholder.image(frame_rgb, channels="RGB")
+                    break
 
             if phone_detected:
-                cap.release()
                 st.session_state.session_active = False
                 st.session_state.detected = True
+                # Display the violation frame briefly or just rerun
                 st.rerun()
-            
-            time.sleep(0.01)
-
-        cap.release()
+            else:
+                st.success("No unauthorized devices detected in this frame.")
 
     elif st.session_state.detected:
         # Detected Screen
