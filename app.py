@@ -136,44 +136,65 @@ def main():
 
     elif st.session_state.session_active:
         st.title("Monitoring Active")
-        st.warning("Position yourself in front of the camera. The system will process each snapshot for unauthorized devices.")
+        st.warning("Live scan for unauthorized mobile devices is in progress.")
         
-        # Use Streamlit's built-in camera input for cloud compatibility
-        enable_camera = st.checkbox("Enable Camera", value=True)
-        img_file_buffer = st.camera_input("Take a snapshot for verification", disabled=not enable_camera)
-        
+        from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
+        import av
+        import queue
+
+        # Thread-safe queue to pass detection signals back to main thread
+        if "detection_queue" not in st.session_state:
+            st.session_state.detection_queue = queue.Queue()
+
+        class PhoneDetectionProcessor(VideoProcessorBase):
+            def __init__(self):
+                self.model = model
+
+            def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+                img = frame.to_ndarray(format="bgr24")
+                
+                # YOLO detection (extreme sensitivity at 0.15)
+                results = self.model(img, stream=True, classes=[67], conf=0.15)
+                
+                phone_detected = False
+                for r in results:
+                    if len(r.boxes) > 0:
+                        phone_detected = True
+                        break
+                
+                if phone_detected:
+                    # Send signal to main thread
+                    st.session_state.detection_queue.put(True)
+                    cv2.putText(img, "WARNING: MOBILE DETECTED", (50, 50), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                
+                return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+        # WebRTC Streamer
+        webrtc_streamer(
+            key="phone-detection",
+            mode=WebRtcMode.SENDRECV,
+            video_processor_factory=PhoneDetectionProcessor,
+            rtc_configuration={
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+            },
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
+
         if st.button("End Manual Session"):
             st.session_state.session_active = False
             st.rerun()
 
-        if img_file_buffer is not None:
-            # Convert the file buffer to an OpenCV image
-            bytes_data = img_file_buffer.getvalue()
-            cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-
-            # YOLO detection (extreme sensitivity at 0.15)
-            results = model(cv2_img, stream=True, classes=[67], conf=0.15)
-            
-            phone_detected = False
-            for r in results:
-                if len(r.boxes) > 0:
-                    phone_detected = True
-                    break
-
-            if phone_detected:
-                # Play alert sound (system beep implementation for Streamlit)
-                st.markdown("""
-                    <audio autoplay>
-                        <source src="https://www.soundjay.com/buttons/beep-01a.mp3" type="audio/mpeg">
-                    </audio>
-                """, unsafe_allow_html=True)
-                
+        # Poll for detection signal in main thread
+        try:
+            detected_signal = st.session_state.detection_queue.get_nowait()
+            if detected_signal:
                 st.session_state.session_active = False
                 st.session_state.detected = True
-                time.sleep(1) # Allow sound to start
                 st.rerun()
-            else:
-                st.success("No unauthorized devices detected in this frame.")
+        except queue.Empty:
+            pass
 
     elif st.session_state.detected:
         # Detected Screen
